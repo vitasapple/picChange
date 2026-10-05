@@ -135,7 +135,8 @@ jobs:
 
       - name: 安装 libheif（Windows HEIC 解码依赖）
         shell: bash
-        run: "$VCPKG_ROOT/vcpkg" install libheif:x64-windows-static-md
+        run: |
+          "$VCPKG_ROOT/vcpkg" install libheif:x64-windows-static-md
 
       - name: Rust 编译缓存
         uses: swatinem/rust-cache@v2
