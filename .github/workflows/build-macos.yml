@@ -6,6 +6,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 显式请求写入权限，否则 GITHUB_TOKEN 默认只读，无法创建 Release
+permissions:
+  contents: write
+
 jobs:
   release-macos:
     runs-on: macos-latest
@@ -20,6 +24,9 @@ jobs:
 
       - name: 安装 Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # 安装 Intel 和 Apple Silicon 两个目标，用于构建通用二进制
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Rust 编译缓存
         uses: swatinem/rust-cache@v2
@@ -36,6 +43,8 @@ jobs:
         with:
           tagName: "v__VERSION__"
           releaseName: "图片格式转换器 v__VERSION__"
-          releaseBody: "图片格式转换器 —— 支持 HEIC/HEIF、PNG、JPG、BMP、TIFF、WEBP 批量转换。"
+          releaseBody: "图片格式转换器 —— 支持 HEIC/HEIF、PNG、JPG、BMP、TIFF、WEBP 批量转换。\n\n通用版本，同时支持 Intel 和 Apple Silicon Mac。"
           releaseDraft: true
           prerelease: false
+          # 构建通用二进制（同时支持 x86_64 Intel 和 arm64 Apple Silicon）
+          args: "--target universal-apple-darwin"
