@@ -1,0 +1,14 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+
+# 系统
+.DS_Store
+
+# 环境
+*.local
+# 宿主工具生成的元数据
+*.artifact.json
