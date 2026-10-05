@@ -2,7 +2,7 @@
 
 基于 **Tauri v2 + Rust + Vite/TypeScript** 的跨平台桌面图片格式批量转换工具。
 
-**支持平台**：macOS（Intel + Apple Silicon）、Windows
+**支持平台**：macOS（Intel x64 / Apple Silicon aarch64 分开发包）、Windows
 
 ## ✨ 功能
 
@@ -43,13 +43,20 @@ npm run tauri dev
 推送 tag 即可自动触发跨平台构建：
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.3 && git push origin v0.1.3
 ```
 
-工作流 `.github/workflows/build-release.yml` 会：
-- macOS runner 构建**通用版** `.dmg`（Intel + Apple Silicon）
-- Windows runner 构建 `.exe`（NSIS）+ `.msi`
-- 汇总后自动创建 **Draft Release**，你到 Releases 页发布即可
+工作流 `.github/workflows/build-release.yml` 会并行构建并分别打包：
+
+| 平台 | 产物 | 体积 |
+|------|------|------|
+| macOS Intel (x86_64) | `_x64.dmg` | 小（单架构） |
+| macOS Apple Silicon (aarch64) | `_aarch64.dmg` | 小（单架构） |
+| Windows | `_x64-setup.exe` (NSIS) + `.msi` | — |
+
+> macOS **按芯片分开打包**而非通用包，包体积更小。用户按自己的芯片架构选对应安装包即可。
+
+构建完成后由 `softprops/action-gh-release` 统一创建 **Draft Release**，你到 Releases 页发布即可。
 
 ## 📁 项目结构
 
