@@ -1,13 +1,12 @@
 //! 图片转换核心逻辑。
 //!
 //! 策略：
-//! - HEIC/HEIF：调用 macOS 系统自带的 `sips` 解码为临时 PNG，再用 image crate 编码到目标格式。
+//! - HEIC/HEIF：macOS 用系统 `sips`；其他平台用 libheif-rs 解码为临时 PNG。
 //! - 其他格式：直接用 image crate 解码再编码。
-//! 这样在 macOS（含 GitHub Actions 的 macos runner）上无需任何系统级依赖。
+//! macOS 走系统原生链路（已验证无损），Windows/Linux 走 libheif（通过 vcpkg 提供）。
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
@@ -91,15 +90,18 @@ fn is_heic(path: &Path) -> bool {
     matches!(ext_of(path).as_str(), "heic" | "heif")
 }
 
-/// 用系统 sips 把 HEIC 解码为临时 PNG，返回临时 PNG 路径。
-fn decode_heic_via_sips(src: &Path) -> Result<PathBuf, String> {
-    if !cfg!(target_os = "macos") {
-        return Err("HEIC 解码仅在 macOS 上可用（依赖系统 sips）".into());
-    }
-
+/// 生成临时 PNG 文件路径（每次调用唯一）。
+fn temp_png_path() -> PathBuf {
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("picconv_{}_{}.png", std::process::id(), n));
+    std::env::temp_dir().join(format!("picconv_{}_{}.png", std::process::id(), n))
+}
 
+/// macOS：调用系统自带 `sips` 把 HEIC 解码为临时 PNG。
+#[cfg(target_os = "macos")]
+fn decode_heic(src: &Path) -> Result<PathBuf, String> {
+    use std::process::Command;
+
+    let tmp = temp_png_path();
     let output = Command::new("sips")
         .args(["-s", "format", "png", "-Z", "20000"])
         .arg(src)
@@ -115,6 +117,60 @@ fn decode_heic_via_sips(src: &Path) -> Result<PathBuf, String> {
     if !tmp.exists() {
         return Err("sips 未生成输出文件".into());
     }
+    Ok(tmp)
+}
+
+/// 其他平台（Windows/Linux）：用 libheif-rs 解码 HEIC 为临时 PNG。
+#[cfg(not(target_os = "macos"))]
+fn decode_heic(src: &Path) -> Result<PathBuf, String> {
+    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+
+    let path_str = src
+        .to_str()
+        .ok_or_else(|| "路径包含无效字符".to_string())?;
+
+    let ctx = HeifContext::read_from_file(path_str)
+        .map_err(|e| format!("打开 HEIC 失败：{e}"))?;
+    let handle = ctx
+        .primary_image_handle()
+        .map_err(|e| format!("读取 HEIC 图像句柄失败：{e}"))?;
+    let lib = LibHeif::new();
+    let image = lib
+        .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None)
+        .map_err(|e| format!("解码 HEIC 像素失败：{e}"))?;
+
+    let planes = image.planes();
+    let plane = planes
+        .interleaved
+        .ok_or_else(|| "HEIC 解码结果无交错像素数据".to_string())?;
+
+    let width = plane.width as u32;
+    let height = plane.height as u32;
+
+    // RGBA：每像素 4 字节
+    let mut rgba = RgbaImage::new(width, height);
+    for y in 0..height {
+        let row_off = (y as usize) * plane.stride;
+        for x in 0..width {
+            let idx = row_off + (x as usize) * 4;
+            if idx + 3 < plane.data.len() {
+                rgba.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        plane.data[idx],
+                        plane.data[idx + 1],
+                        plane.data[idx + 2],
+                        plane.data[idx + 3],
+                    ]),
+                );
+            }
+        }
+    }
+
+    let tmp = temp_png_path();
+    rgba.save(&tmp)
+        .map_err(|e| format!("保存 HEIC 解码结果失败：{e}"))?;
     Ok(tmp)
 }
 
@@ -134,7 +190,7 @@ fn flatten_to_rgb(img: &RgbaImage) -> RgbImage {
 /// 加载源图为 DynamicImage。
 fn load_source(src: &Path) -> Result<DynamicImage, String> {
     if is_heic(src) {
-        let tmp = decode_heic_via_sips(src)?;
+        let tmp = decode_heic(src)?;
         let result = image::open(&tmp).map_err(|e| format!("读取 HEIC 解码结果失败：{e}"));
         let _ = fs::remove_file(&tmp);
         result

@@ -18,8 +18,7 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# 图像处理：纯 Rust，支持 PNG/JPEG/BMP/TIFF/WEBP/GIF 等
-# 默认开启常用格式特性（png, jpeg, bmp, tiff, webp）
+# 图像处理：纯 Rust，支持 PNG/JPEG/BMP/TIFF/WEBP
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -28,7 +27,9 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 
-# 路径 / 目录处理（预留）
+# 非 macOS 平台（Windows/Linux）用 libheif 解码 HEIC
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libheif-rs = "2"
 
 [profile.release]
 codegen-units = 1

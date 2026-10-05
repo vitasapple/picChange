@@ -1,0 +1,144 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# 显式请求写入权限，否则 GITHUB_TOKEN 默认只读，无法创建 Release
+permissions:
+  contents: write
+
+jobs:
+  # ============ macOS 构建（通用版：Intel + Apple Silicon） ============
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装 Rust stable（含双架构 target）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Rust 编译缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建并上传 macOS 安装包
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 只构建、不上传 Release（由最后的 release job 统一发布，避免 tag 混乱）
+          args: "--target universal-apple-darwin"
+
+      - name: 收集 macOS 产物
+        id: collect-macos
+        shell: bash
+        run: |
+          mkdir -p dist-macos
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg dist-macos/ 2>/dev/null || true
+          cp src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz dist-macos/ 2>/dev/null || true
+          echo "=== macOS 产物 ==="
+          ls -la dist-macos/ || echo "(无)"
+
+      - name: 上传 macOS 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: dist-macos/
+          if-no-files-found: warn
+
+  # ============ Windows 构建 ============
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 libheif（vcpkg，Windows HEIC 解码依赖）
+        run: vcpkg install libheif:x64-windows-static-md
+
+      - name: Rust 编译缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建 Windows 安装包（MSI + NSIS）
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ""
+
+      - name: 收集 Windows 产物
+        id: collect-win
+        shell: bash
+        run: |
+          mkdir -p dist-windows
+          cp src-tauri/target/release/bundle/nsis/*.exe dist-windows/ 2>/dev/null || true
+          cp src-tauri/target/release/bundle/msi/*.msi dist-windows/ 2>/dev/null || true
+          echo "=== Windows 产物 ==="
+          ls -la dist-windows/ || echo "(无)"
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: dist-windows/
+          if-no-files-found: warn
+
+  # ============ 汇总并创建 Release ============
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-windows]
+    steps:
+      - name: 下载所有产物
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets/
+          merge-multiple: true
+
+      - name: 列出产物
+        shell: bash
+        run: ls -laR release-assets/
+
+      - name: 创建 Release 并上传安装包
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 图片格式转换器 ${{ github.ref_name }}
+          body: |
+            图片格式转换器 —— 支持 HEIC/HEIF、PNG、JPG、BMP、TIFF、WEBP 批量转换。
+
+            **支持的平台：**
+            - macOS 通用版（Intel + Apple Silicon）：`.dmg`
+            - Windows：`.exe`（NSIS 安装程序）+ `.msi`
+          draft: true
+          prerelease: false
+          files: release-assets/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
